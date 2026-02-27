@@ -3,6 +3,7 @@ require("dotenv").config();
 const TelegramBot = require("node-telegram-bot-api");
 const { spawn } = require("child_process");
 const fs = require("fs");
+const https = require("https");
 const os = require("os");
 const path = require("path");
 
@@ -204,6 +205,86 @@ function selectWorkersForTasks(chatId, agent, taskCount) {
 function trimTelegram(text) {
   const t = String(text || "");
   return t.length > 4000 ? t.slice(0, 4000) + "\n…(truncated)" : t;
+}
+
+function sanitizeFileName(name, fallback = "file") {
+  const base = String(name || "").trim() || fallback;
+  return base.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function downloadToFile(url, destinationPath) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, (response) => {
+      if (response.statusCode !== 200) {
+        response.resume();
+        return reject(new Error(`Download failed with status ${response.statusCode}`));
+      }
+
+      const stream = fs.createWriteStream(destinationPath);
+      response.pipe(stream);
+      stream.on("finish", () => stream.close(resolve));
+      stream.on("error", (err) => reject(err));
+    });
+
+    request.on("error", (err) => reject(err));
+  });
+}
+
+async function buildPromptFromMessage(botInstance, msg) {
+  const text = msg.text?.trim();
+  if (text) return text;
+
+  const caption = String(msg.caption || "").trim();
+  const uploadDir = path.join(os.tmpdir(), "ai-bot-uploads");
+  fs.mkdirSync(uploadDir, { recursive: true });
+
+  if (Array.isArray(msg.photo) && msg.photo.length > 0) {
+    const photo = msg.photo[msg.photo.length - 1];
+    const fileId = photo.file_id;
+    const file = await botInstance.getFile(fileId);
+    const ext = path.extname(file.file_path || "") || ".jpg";
+    const fileName = `${Date.now()}-${msg.message_id || "m"}-photo${ext}`;
+    const localPath = path.join(uploadDir, sanitizeFileName(fileName, "photo.jpg"));
+    const fileLink = await botInstance.getFileLink(fileId);
+    await downloadToFile(fileLink, localPath);
+
+    return [
+      caption || "Analyze the attached image.",
+      "",
+      "Attached file from Telegram:",
+      `- type: photo`,
+      `- local_path: ${localPath}`,
+      "",
+      "Use this local file in your response.",
+    ].join("\n");
+  }
+
+  if (msg.document?.file_id) {
+    const fileId = msg.document.file_id;
+    const file = await botInstance.getFile(fileId);
+    const fromName = sanitizeFileName(msg.document.file_name || "", "");
+    const extFromPath = path.extname(file.file_path || "");
+    const ext = path.extname(fromName) || extFromPath || ".bin";
+    const base = fromName ? path.basename(fromName, path.extname(fromName)) : "document";
+    const fileName = `${Date.now()}-${msg.message_id || "m"}-${base}${ext}`;
+    const localPath = path.join(uploadDir, sanitizeFileName(fileName, "document.bin"));
+    const fileLink = await botInstance.getFileLink(fileId);
+    await downloadToFile(fileLink, localPath);
+
+    return [
+      caption || "Analyze the attached document.",
+      "",
+      "Attached file from Telegram:",
+      `- type: document`,
+      `- name: ${msg.document.file_name || path.basename(localPath)}`,
+      `- mime_type: ${msg.document.mime_type || "unknown"}`,
+      `- local_path: ${localPath}`,
+      "",
+      "Use this local file in your response.",
+    ].join("\n");
+  }
+
+  return "";
 }
 
 function parseJsonBlock(text) {
@@ -606,6 +687,7 @@ function helpText() {
     "/agent default — reset to default agent",
     `/worker <1-${MAX_WORKER_TASKS}> <message> — send task to a specific worker`,
     "/worker list — show worker IDs",
+    "Send photo/document with optional caption — bot downloads file and passes local path to agent",
     "",
     MULTI_AGENT_MODE
       ? "Default mode: coordinator + background workers."
@@ -619,12 +701,19 @@ function helpText() {
 
 bot.on("message", async (msg) => {
   const chatId = String(msg.chat?.id || "");
-  const text = msg.text?.trim();
-  if (!chatId || !text) return;
+  if (!chatId) return;
   if (isDuplicateMessage(msg)) return;
 
   if (!isAllowedChat(msg)) return;
   if (!isAllowedUser(msg)) return bot.sendMessage(chatId, "Not allowed.");
+
+  let text = "";
+  try {
+    text = await buildPromptFromMessage(bot, msg);
+  } catch (e) {
+    return bot.sendMessage(chatId, trimTelegram(`Failed to process attachment: ${e.message || String(e)}`));
+  }
+  if (!text) return;
 
   if (text === "/help") return bot.sendMessage(chatId, helpText());
 
