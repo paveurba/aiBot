@@ -25,7 +25,7 @@ const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 180000);
 const SEEN_TTL_MS = Number(process.env.SEEN_TTL_MS || 10 * 60 * 1000);
 const REUSE_SESSIONS = String(process.env.REUSE_SESSIONS || "1") === "1";
 
-const MULTI_AGENT_MODE = String(process.env.MULTI_AGENT_MODE || "1") === "1";
+const MULTI_AGENT_MODE = String(process.env.MULTI_AGENT_MODE || "0") === "1";
 const WORKER_AGENTS = (process.env.WORKER_AGENTS || "codex,claude")
   .split(",")
   .map((s) => s.trim().toLowerCase())
@@ -45,6 +45,7 @@ const ALLOW_GROUPS = String(process.env.ALLOW_GROUPS || "0") === "1";
 const bot = new TelegramBot(token, { polling: true });
 const seenMessages = new Map();
 const workerLoad = new Map();
+const chatQueue = new Map();
 
 function loadJson(filePath, fallback) {
   try {
@@ -126,6 +127,16 @@ function isDuplicateMessage(msg) {
   if (seenMessages.has(key)) return true;
   seenMessages.set(key, now);
   return false;
+}
+
+function enqueueChatJob(chatId, jobFn) {
+  const previous = chatQueue.get(chatId) || Promise.resolve();
+  const current = previous.catch(() => {}).then(() => jobFn());
+  chatQueue.set(chatId, current);
+  current.finally(() => {
+    if (chatQueue.get(chatId) === current) chatQueue.delete(chatId);
+  });
+  return current;
 }
 
 function getSessionForAgent(sessions, chatId, agent) {
@@ -717,106 +728,103 @@ bot.on("message", async (msg) => {
 
   if (text === "/help") return bot.sendMessage(chatId, helpText());
 
-  const settings = loadSettings();
-  const sessions = loadSessions();
-  const selection = settings[chatId]?.model || DEFAULT_MODEL;
-  const agent = resolveAgent(selection);
-  const codexModel = resolveCodexModel(selection);
+  enqueueChatJob(chatId, async () => {
+    const settings = loadSettings();
+    const sessions = loadSessions();
+    const selection = settings[chatId]?.model || DEFAULT_MODEL;
+    const agent = resolveAgent(selection);
+    const codexModel = resolveCodexModel(selection);
 
-  if (text === "/reset") {
-    if (settings[chatId]) {
-      delete settings[chatId];
-      saveSettings(settings);
-    }
-    if (sessions[chatId]) {
-      delete sessions[chatId];
-      saveSessions(sessions);
-    }
-    return bot.sendMessage(chatId, "Reset done.");
-  }
-
-  if (text === "/agent" || text === "/model") {
-    return bot.sendMessage(chatId, `Current agent: ${agent}`);
-  }
-
-  if (text === "/worker list") {
-    return bot.sendMessage(
-      chatId,
-      `Workers: ${Array.from({ length: MAX_WORKER_TASKS }, (_, i) => i + 1).join(", ")}`
-    );
-  }
-
-  if (text.startsWith("/worker ")) {
-    const match = text.match(/^\/worker\s+(\d+)\s+([\s\S]+)$/i);
-    if (!match) {
-      return bot.sendMessage(chatId, `Usage: /worker <1-${MAX_WORKER_TASKS}> <message>`);
-    }
-
-    const workerId = Number(match[1]);
-    const workerPrompt = String(match[2] || "").trim();
-    if (!Number.isInteger(workerId) || workerId < 1 || workerId > MAX_WORKER_TASKS) {
-      return bot.sendMessage(chatId, `Worker must be between 1 and ${MAX_WORKER_TASKS}.`);
-    }
-    if (!workerPrompt) {
-      return bot.sendMessage(chatId, `Usage: /worker <1-${MAX_WORKER_TASKS}> <message>`);
-    }
-
-    try {
-      const workerSessionId = REUSE_SESSIONS
-        ? getWorkerSessionForAgent(sessions, chatId, agent, workerId)
-        : null;
-      const { sessionId: newWorkerSessionId, reply } = await runAgent(agent, {
-        sessionId: workerSessionId,
-        prompt: workerPrompt,
-        model: codexModel,
-      });
-      if (REUSE_SESSIONS && newWorkerSessionId && newWorkerSessionId !== workerSessionId) {
-        setWorkerSessionForAgent(sessions, chatId, agent, workerId, newWorkerSessionId);
-        saveSessions(sessions);
-      }
-      return bot.sendMessage(chatId, trimTelegram(`worker-${workerId} [${agent}]\n${reply}`));
-    } catch (e) {
-      return bot.sendMessage(chatId, trimTelegram(`worker-${workerId} [${agent}] failed: ${e.message || String(e)}`));
-    }
-  }
-
-  if (text.startsWith("/agent ") || text.startsWith("/model ")) {
-    const requested = text.replace(/^\/(agent|model)\s+/i, "").trim().toLowerCase();
-    if (!requested) return bot.sendMessage(chatId, "Usage: /agent codex|claude");
-
-    if (requested === "default") {
-      if (settings[chatId]?.model) {
-        delete settings[chatId].model;
-        if (Object.keys(settings[chatId]).length === 0) delete settings[chatId];
+    if (text === "/reset") {
+      if (settings[chatId]) {
+        delete settings[chatId];
         saveSettings(settings);
       }
-      return bot.sendMessage(chatId, `Agent reset to default: ${DEFAULT_MODEL || "codex"}`);
+      if (sessions[chatId]) {
+        delete sessions[chatId];
+        saveSessions(sessions);
+      }
+      return bot.sendMessage(chatId, "Reset done.");
     }
 
-    if (requested !== "codex" && requested !== "claude") {
-      return bot.sendMessage(chatId, "Use: /agent codex or /agent claude");
+    if (text === "/agent" || text === "/model") {
+      return bot.sendMessage(chatId, `Current agent: ${agent}`);
     }
 
-    settings[chatId] = { ...(settings[chatId] || {}), model: requested };
-    saveSettings(settings);
-    return bot.sendMessage(chatId, `Agent set to: ${requested}`);
-  }
+    if (text === "/worker list") {
+      return bot.sendMessage(
+        chatId,
+        `Workers: ${Array.from({ length: MAX_WORKER_TASKS }, (_, i) => i + 1).join(", ")}`
+      );
+    }
 
-  if (MULTI_AGENT_MODE) {
-    processMultiAgentJob({
-      chatId,
-      text,
-      coordinatorAgent: agent,
-      coordinatorModel: codexModel,
-      sessions,
-    }).catch(async (e) => {
-      const out = `Error: ${e.message || String(e)}`.slice(0, 4000);
-      await bot.sendMessage(chatId, out);
-    });
-    return;
-  }
+    if (text.startsWith("/worker ")) {
+      const match = text.match(/^\/worker\s+(\d+)\s+([\s\S]+)$/i);
+      if (!match) {
+        return bot.sendMessage(chatId, `Usage: /worker <1-${MAX_WORKER_TASKS}> <message>`);
+      }
 
-  try {
+      const workerId = Number(match[1]);
+      const workerPrompt = String(match[2] || "").trim();
+      if (!Number.isInteger(workerId) || workerId < 1 || workerId > MAX_WORKER_TASKS) {
+        return bot.sendMessage(chatId, `Worker must be between 1 and ${MAX_WORKER_TASKS}.`);
+      }
+      if (!workerPrompt) {
+        return bot.sendMessage(chatId, `Usage: /worker <1-${MAX_WORKER_TASKS}> <message>`);
+      }
+
+      try {
+        const workerSessionId = REUSE_SESSIONS
+          ? getWorkerSessionForAgent(sessions, chatId, agent, workerId)
+          : null;
+        const { sessionId: newWorkerSessionId, reply } = await runAgent(agent, {
+          sessionId: workerSessionId,
+          prompt: workerPrompt,
+          model: codexModel,
+        });
+        if (REUSE_SESSIONS && newWorkerSessionId && newWorkerSessionId !== workerSessionId) {
+          setWorkerSessionForAgent(sessions, chatId, agent, workerId, newWorkerSessionId);
+          saveSessions(sessions);
+        }
+        return bot.sendMessage(chatId, trimTelegram(`worker-${workerId} [${agent}]\n${reply}`));
+      } catch (e) {
+        return bot.sendMessage(chatId, trimTelegram(`worker-${workerId} [${agent}] failed: ${e.message || String(e)}`));
+      }
+    }
+
+    if (text.startsWith("/agent ") || text.startsWith("/model ")) {
+      const requested = text.replace(/^\/(agent|model)\s+/i, "").trim().toLowerCase();
+      if (!requested) return bot.sendMessage(chatId, "Usage: /agent codex|claude");
+
+      if (requested === "default") {
+        if (settings[chatId]?.model) {
+          delete settings[chatId].model;
+          if (Object.keys(settings[chatId]).length === 0) delete settings[chatId];
+          saveSettings(settings);
+        }
+        return bot.sendMessage(chatId, `Agent reset to default: ${DEFAULT_MODEL || "codex"}`);
+      }
+
+      if (requested !== "codex" && requested !== "claude") {
+        return bot.sendMessage(chatId, "Use: /agent codex or /agent claude");
+      }
+
+      settings[chatId] = { ...(settings[chatId] || {}), model: requested };
+      saveSettings(settings);
+      return bot.sendMessage(chatId, `Agent set to: ${requested}`);
+    }
+
+    if (MULTI_AGENT_MODE) {
+      await processMultiAgentJob({
+        chatId,
+        text,
+        coordinatorAgent: agent,
+        coordinatorModel: codexModel,
+        sessions,
+      });
+      return;
+    }
+
     const sessionId = REUSE_SESSIONS ? getSessionForAgent(sessions, chatId, agent) : null;
     const { sessionId: newSessionId, reply } = await runAgent(agent, {
       sessionId,
@@ -830,10 +838,10 @@ bot.on("message", async (msg) => {
     }
 
     await bot.sendMessage(chatId, trimTelegram(reply));
-  } catch (e) {
+  }).catch(async (e) => {
     const out = `Error: ${e.message || String(e)}`.slice(0, 4000);
     await bot.sendMessage(chatId, out);
-  }
+  });
 });
 
 console.log("Telegram bot running.");
