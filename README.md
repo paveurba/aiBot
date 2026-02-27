@@ -58,7 +58,6 @@ Required:
 Optional:
 
 - `BOT_WORKDIR` - working directory for CLI runs used by both `codex` and `claude` (default: current directory).
-- `CODEX_WORKDIR` - legacy fallback name for backward compatibility.
 - `CODEX_BIN` - codex executable name/path (default: `codex`).
 - `CLAUDE_BIN` - claude executable name/path (default: `claude`).
 - `DEFAULT_MODEL` - default agent/model (for example `codex` or `claude`).

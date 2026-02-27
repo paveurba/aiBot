@@ -12,7 +12,7 @@ if (!token) {
   process.exit(1);
 }
 
-const WORKDIR = process.env.BOT_WORKDIR || process.env.CODEX_WORKDIR || process.cwd();
+const WORKDIR = process.env.BOT_WORKDIR || process.cwd();
 const SETTINGS_PATH = path.join(__dirname, "settings.json");
 const SESSIONS_PATH = path.join(__dirname, "sessions.json");
 
