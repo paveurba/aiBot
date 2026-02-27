@@ -25,16 +25,7 @@ const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 180000);
 const SEEN_TTL_MS = Number(process.env.SEEN_TTL_MS || 10 * 60 * 1000);
 const REUSE_SESSIONS = String(process.env.REUSE_SESSIONS || "1") === "1";
 
-const MULTI_AGENT_MODE = String(process.env.MULTI_AGENT_MODE || "0") === "1";
-const WORKER_AGENTS = (process.env.WORKER_AGENTS || "codex,claude")
-  .split(",")
-  .map((s) => s.trim().toLowerCase())
-  .filter((s) => s === "codex" || s === "claude");
 const MAX_WORKER_TASKS = Math.max(1, Number(process.env.MAX_WORKER_TASKS || 10));
-const MIN_WORKER_TASKS = Math.max(
-  1,
-  Math.min(MAX_WORKER_TASKS, Number(process.env.MIN_WORKER_TASKS || 2))
-);
 
 const ALLOWLIST = (process.env.TELEGRAM_ALLOWLIST || "")
   .split(",")
@@ -44,7 +35,6 @@ const ALLOW_GROUPS = String(process.env.ALLOW_GROUPS || "0") === "1";
 
 const bot = new TelegramBot(token, { polling: true });
 const seenMessages = new Map();
-const workerLoad = new Map();
 const chatQueue = new Map();
 
 function loadJson(filePath, fallback) {
@@ -183,36 +173,6 @@ function setWorkerSessionForAgent(sessions, chatId, agent, workerId, sessionId) 
   sessions[chatId].workers[agent][String(workerId)] = sessionId;
 }
 
-function workerLoadKey(chatId, agent, workerId) {
-  return `${chatId}:${agent}:${workerId}`;
-}
-
-function getWorkerLoad(chatId, agent, workerId) {
-  return workerLoad.get(workerLoadKey(chatId, agent, workerId)) || 0;
-}
-
-function incWorkerLoad(chatId, agent, workerId) {
-  const key = workerLoadKey(chatId, agent, workerId);
-  workerLoad.set(key, getWorkerLoad(chatId, agent, workerId) + 1);
-}
-
-function decWorkerLoad(chatId, agent, workerId) {
-  const key = workerLoadKey(chatId, agent, workerId);
-  const next = getWorkerLoad(chatId, agent, workerId) - 1;
-  if (next > 0) workerLoad.set(key, next);
-  else workerLoad.delete(key);
-}
-
-function selectWorkersForTasks(chatId, agent, taskCount) {
-  const count = Math.max(1, Math.min(MAX_WORKER_TASKS, Number(taskCount) || 1));
-  const ranked = Array.from({ length: MAX_WORKER_TASKS }, (_, i) => i + 1).map((id) => ({
-    id,
-    load: getWorkerLoad(chatId, agent, id),
-  }));
-  ranked.sort((a, b) => a.load - b.load || a.id - b.id);
-  return ranked.slice(0, count).map((x) => x.id);
-}
-
 function trimTelegram(text) {
   const t = String(text || "");
   return t.length > 4000 ? t.slice(0, 4000) + "\n…(truncated)" : t;
@@ -296,95 +256,6 @@ async function buildPromptFromMessage(botInstance, msg) {
   }
 
   return "";
-}
-
-function parseJsonBlock(text) {
-  const raw = String(text || "").trim();
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    // try fenced block
-  }
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) {
-    try {
-      return JSON.parse(fenced[1]);
-    } catch {
-      return null;
-    }
-  }
-  const first = raw.indexOf("{");
-  const last = raw.lastIndexOf("}");
-  if (first >= 0 && last > first) {
-    try {
-      return JSON.parse(raw.slice(first, last + 1));
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-function shouldUseMultipleWorkers(userTask) {
-  const t = String(userTask || "").trim();
-  if (!t) return false;
-  return t.length >= 60 || /\\band\\b|,|;|\\n/i.test(t);
-}
-
-function estimateRequestedWorkerCount(userTask) {
-  const t = String(userTask || "").trim();
-  if (!t) return 1;
-
-  const numbered = t
-    .split(/\r?\n/)
-    .filter((line) => /^\s*(\d+[\).\:-]|[-*])\s+/.test(line))
-    .length;
-  const byQuestionMark = t.split("?").filter((s) => s.trim()).length;
-  const byNewline = t.split(/\r?\n+/).filter((s) => s.trim()).length;
-
-  const explicit = Math.max(numbered, byQuestionMark > 1 ? byQuestionMark : 0, byNewline > 1 ? byNewline : 0, 1);
-  const floor = shouldUseMultipleWorkers(t) ? MIN_WORKER_TASKS : 1;
-  return Math.max(floor, Math.min(MAX_WORKER_TASKS, explicit));
-}
-
-function buildFallbackTasks(agent, userTask) {
-  const taskTemplates = [
-    ["Primary solution", "Solve the request directly and concisely."],
-    ["Alternative solution", "Provide an alternative implementation approach."],
-    ["Risks and edge cases", "Analyze risks, edge cases, and likely failure modes."],
-    ["Testing strategy", "Design practical tests for the request."],
-    ["Performance", "Optimize for speed and resource efficiency."],
-    ["Reliability", "Focus on retries, timeouts, and fault tolerance."],
-    ["Security review", "Identify security concerns and concrete mitigations."],
-    ["DX improvements", "Improve usability, logs, and developer workflow."],
-    ["Validation checklist", "Produce a concise acceptance checklist."],
-    ["Rollback plan", "Describe safe rollback and recovery steps."],
-  ];
-  return taskTemplates.slice(0, MAX_WORKER_TASKS).map(([title, instruction]) => ({
-    title,
-    agent,
-    prompt: `${instruction}\n\nRequest:\n${userTask}`,
-  }));
-}
-
-function ensureMinimumWorkerTasks(tasks, agent, userTask, targetCount) {
-  const normalized = Array.isArray(tasks) ? tasks.slice(0, MAX_WORKER_TASKS) : [];
-  const requiredCount = Math.max(1, Math.min(MAX_WORKER_TASKS, Number(targetCount) || 1));
-  if (normalized.length >= requiredCount) return normalized;
-
-  const fallback = buildFallbackTasks(agent, userTask);
-  const used = new Set(normalized.map((t) => `${t.title || ""}|${t.prompt || ""}`));
-
-  for (const task of fallback) {
-    if (normalized.length >= requiredCount || normalized.length >= MAX_WORKER_TASKS) break;
-    const key = `${task.title || ""}|${task.prompt || ""}`;
-    if (used.has(key)) continue;
-    normalized.push(task);
-    used.add(key);
-  }
-
-  return normalized.slice(0, MAX_WORKER_TASKS);
 }
 
 function runCodex({ sessionId, prompt, model }) {
@@ -547,147 +418,6 @@ function runAgent(agent, options) {
   return agent === "claude" ? runClaude(options) : runCodex(options);
 }
 
-async function createWorkerPlan({ coordinatorAgent, coordinatorSessionId, userTask }) {
-  const targetWorkers = estimateRequestedWorkerCount(userTask);
-  const pool = coordinatorAgent;
-  const prompt = [
-    "You are a coordinator.",
-    `Break task into exactly ${targetWorkers} worker tasks.`,
-    `Allowed agents: ${pool}.`,
-    "Return ONLY strict JSON:",
-    `{"tasks":[{"title":"...","agent":"${coordinatorAgent}","prompt":"..."}]}`,
-    "User task:",
-    userTask,
-  ].join("\n");
-
-  const { sessionId, reply } = await runAgent(coordinatorAgent, {
-    sessionId: coordinatorSessionId,
-    prompt,
-    model: resolveCodexModel(coordinatorAgent),
-  });
-
-  const parsed = parseJsonBlock(reply);
-  if (!parsed || !Array.isArray(parsed.tasks) || parsed.tasks.length === 0) {
-    return {
-      sessionId,
-      tasks: ensureMinimumWorkerTasks(
-        [{ title: "Main task", agent: coordinatorAgent, prompt: userTask }],
-        coordinatorAgent,
-        userTask,
-        targetWorkers
-      ),
-    };
-  }
-
-  const tasks = parsed.tasks
-    .slice(0, MAX_WORKER_TASKS)
-    .map((t, i) => ({
-      title: String(t.title || `Task ${i + 1}`).slice(0, 80),
-      agent: coordinatorAgent,
-      prompt: String(t.prompt || "").trim(),
-    }))
-    .filter((t) => t.prompt);
-
-  if (!tasks.length) {
-    return {
-      sessionId,
-      tasks: ensureMinimumWorkerTasks(
-        [{ title: "Main task", agent: coordinatorAgent, prompt: userTask }],
-        coordinatorAgent,
-        userTask,
-        targetWorkers
-      ),
-    };
-  }
-
-  return { sessionId, tasks: ensureMinimumWorkerTasks(tasks, coordinatorAgent, userTask, targetWorkers) };
-}
-
-async function processMultiAgentJob({ chatId, text, coordinatorAgent, coordinatorModel, sessions }) {
-  const requestedWorkers = estimateRequestedWorkerCount(text);
-
-  if (requestedWorkers <= 1) {
-    const workerId = 1;
-    const workerSessionId = REUSE_SESSIONS
-      ? getWorkerSessionForAgent(sessions, chatId, coordinatorAgent, workerId)
-      : null;
-
-    incWorkerLoad(chatId, coordinatorAgent, workerId);
-    try {
-      const { sessionId: newWorkerSessionId, reply } = await runAgent(coordinatorAgent, {
-        sessionId: workerSessionId,
-        prompt: text,
-        model: coordinatorModel,
-      });
-      if (REUSE_SESSIONS && newWorkerSessionId && newWorkerSessionId !== workerSessionId) {
-        setWorkerSessionForAgent(sessions, chatId, coordinatorAgent, workerId, newWorkerSessionId);
-        saveSessions(sessions);
-      }
-      await bot.sendMessage(chatId, trimTelegram(`worker-${workerId} [${coordinatorAgent}]\n${reply || "(no text output)"}`));
-    } finally {
-      decWorkerLoad(chatId, coordinatorAgent, workerId);
-    }
-    return;
-  }
-
-  let coordinatorSessionId = REUSE_SESSIONS ? getSessionForAgent(sessions, chatId, coordinatorAgent) : null;
-
-  const plan = await createWorkerPlan({
-    coordinatorAgent,
-    coordinatorSessionId,
-    userTask: text,
-  });
-
-  coordinatorSessionId = plan.sessionId || coordinatorSessionId;
-  if (REUSE_SESSIONS && coordinatorSessionId) {
-    setSessionForAgent(sessions, chatId, coordinatorAgent, coordinatorSessionId);
-    saveSessions(sessions);
-  }
-
-  const assignedWorkerIds = selectWorkersForTasks(chatId, coordinatorAgent, plan.tasks.length);
-  for (const id of assignedWorkerIds) incWorkerLoad(chatId, coordinatorAgent, id);
-
-  const results = await Promise.all(
-    plan.tasks.map(async (task, i) => {
-      const workerId = assignedWorkerIds[i] || 1;
-      try {
-        const workerSessionId = REUSE_SESSIONS
-          ? getWorkerSessionForAgent(sessions, chatId, task.agent, workerId)
-          : null;
-        const { sessionId: newWorkerSessionId, reply } = await runAgent(task.agent, {
-          sessionId: workerSessionId,
-          prompt: task.prompt,
-          model: task.agent === "codex" ? coordinatorModel : null,
-        });
-        if (REUSE_SESSIONS && newWorkerSessionId && newWorkerSessionId !== workerSessionId) {
-          setWorkerSessionForAgent(sessions, chatId, task.agent, workerId, newWorkerSessionId);
-          saveSessions(sessions);
-        }
-        return { index: workerId, agent: task.agent, title: task.title, reply };
-      } catch (e) {
-        return {
-          index: workerId,
-          agent: task.agent,
-          title: task.title,
-          reply: `Worker failed: ${e.message || String(e)}`,
-        };
-      } finally {
-        decWorkerLoad(chatId, coordinatorAgent, workerId);
-      }
-    })
-  );
-
-  const ordered = results.slice().sort((a, b) => a.index - b.index);
-  for (const result of ordered) {
-    const title = String(result.title || "task").slice(0, 80);
-    const body = [
-      `worker-${result.index} [${result.agent}] ${title}`,
-      result.reply || "(no text output)",
-    ].join("\n");
-    await bot.sendMessage(chatId, trimTelegram(body));
-  }
-}
-
 function helpText() {
   return [
     "Commands:",
@@ -700,9 +430,7 @@ function helpText() {
     "/worker list — show worker IDs",
     "Send photo/document with optional caption — bot downloads file and passes local path to agent",
     "",
-    MULTI_AGENT_MODE
-      ? "Default mode: coordinator + background workers."
-      : "Default mode: single agent final response.",
+    "Default mode: single agent final response.",
     "",
     "Security:",
     "- Only allowlisted user IDs can use this bot.",
@@ -814,17 +542,6 @@ bot.on("message", async (msg) => {
       return bot.sendMessage(chatId, `Agent set to: ${requested}`);
     }
 
-    if (MULTI_AGENT_MODE) {
-      await processMultiAgentJob({
-        chatId,
-        text,
-        coordinatorAgent: agent,
-        coordinatorModel: codexModel,
-        sessions,
-      });
-      return;
-    }
-
     const sessionId = REUSE_SESSIONS ? getSessionForAgent(sessions, chatId, agent) : null;
     const { sessionId: newSessionId, reply } = await runAgent(agent, {
       sessionId,
@@ -848,7 +565,5 @@ console.log("Telegram bot running.");
 console.log("BOT_WORKDIR:", WORKDIR);
 console.log("Default model:", DEFAULT_MODEL || "(none)");
 console.log("Reuse sessions:", REUSE_SESSIONS);
-console.log("Multi-agent mode:", MULTI_AGENT_MODE);
-console.log("Worker agents:", WORKER_AGENTS.join(", ") || "(none)");
 console.log("Groups allowed:", ALLOW_GROUPS);
 console.log("Allowlist:", ALLOWLIST.length ? ALLOWLIST.join(", ") : "(empty -> allows all)");

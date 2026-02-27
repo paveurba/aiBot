@@ -85,9 +85,7 @@ Optional:
 - `DEFAULT_MODEL` - default agent/model (for example `codex` or `claude`).
 - `REQUEST_TIMEOUT_MS` - request timeout in milliseconds (default: `180000`).
 - `REUSE_SESSIONS` - `1` to reuse CLI sessions, `0` to disable (default: `1`).
-- `MULTI_AGENT_MODE` - `1` enables multi-worker orchestration, `0` single-agent mode (default: `0`).
 - `MAX_WORKER_TASKS` - maximum worker count (default: `10`).
-- `MIN_WORKER_TASKS` - minimum worker count when task is split (default: `2`).
 - `TELEGRAM_ALLOWLIST` - comma-separated Telegram user IDs allowed to use the bot. If empty, anyone can use the bot.
 - `ALLOW_GROUPS` - `1` to allow group chats, `0` private chats only (default: `0`).
 
@@ -95,7 +93,6 @@ Optional:
 
 - Bot receives a Telegram message.
 - It routes work to selected agent (`codex` or `claude`).
-- In multi-agent mode, it can split one request into several worker tasks and return each worker result.
 - Chat-specific settings and session IDs are stored in:
   - `settings.json`
   - `sessions.json`
