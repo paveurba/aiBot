@@ -2,6 +2,11 @@
 
 Telegram bot that forwards messages to `codex` or `claude` CLI and returns responses in chat.
 
+## Node.js Libraries Used
+
+- `node-telegram-bot-api` (`^0.67.0`) - Telegram Bot API client used to receive and send Telegram messages.
+- `dotenv` (`^17.3.1`) - Loads environment variables from `.env` into `process.env`.
+
 ## Requirements
 
 - Node.js 18+ (recommended)
@@ -52,7 +57,8 @@ Required:
 
 Optional:
 
-- `CODEX_WORKDIR` - working directory for CLI runs (default: current directory).
+- `BOT_WORKDIR` - working directory for CLI runs used by both `codex` and `claude` (default: current directory).
+- `CODEX_WORKDIR` - legacy fallback name for backward compatibility.
 - `CODEX_BIN` - codex executable name/path (default: `codex`).
 - `CLAUDE_BIN` - claude executable name/path (default: `claude`).
 - `DEFAULT_MODEL` - default agent/model (for example `codex` or `claude`).
@@ -98,6 +104,20 @@ Logs are written to:
 
 - `logs/bot.out.log`
 - `logs/bot.err.log`
+
+### macOS Service Status
+
+Verified on February 27, 2026 with `./scripts/status-service.sh`:
+
+- LaunchAgent plist exists: `~/Library/LaunchAgents/com.pavels.telegram.bot.plist`
+- Service state: `running`
+- Program: `/opt/homebrew/bin/node`
+- PID was present (`24045` at check time)
+- Log paths are configured:
+  - `logs/bot.out.log`
+  - `logs/bot.err.log`
+
+This confirms the macOS service is created and currently running.
 
 ## Notes
 

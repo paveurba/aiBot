@@ -12,7 +12,7 @@ if (!token) {
   process.exit(1);
 }
 
-const WORKDIR = process.env.CODEX_WORKDIR || process.cwd();
+const WORKDIR = process.env.BOT_WORKDIR || process.env.CODEX_WORKDIR || process.cwd();
 const SETTINGS_PATH = path.join(__dirname, "settings.json");
 const SESSIONS_PATH = path.join(__dirname, "sessions.json");
 
@@ -748,7 +748,7 @@ bot.on("message", async (msg) => {
 });
 
 console.log("Telegram bot running.");
-console.log("WORKDIR:", WORKDIR);
+console.log("BOT_WORKDIR:", WORKDIR);
 console.log("Default model:", DEFAULT_MODEL || "(none)");
 console.log("Reuse sessions:", REUSE_SESSIONS);
 console.log("Multi-agent mode:", MULTI_AGENT_MODE);
