@@ -49,6 +49,28 @@ TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 node bot.js
 ```
 
+## Make It Private (Your Telegram ID Only)
+
+If you want this bot to reply only to you, set your Telegram user ID in `.env`.
+
+Example:
+
+```dotenv
+TELEGRAM_ALLOWLIST=123456789
+ALLOW_GROUPS=0
+```
+
+What this does:
+
+- Only user `123456789` can use the bot.
+- Group chats are blocked.
+- Other users will get: `Not allowed.`
+
+How to find your Telegram user ID:
+
+- In Telegram, message `@userinfobot` and copy your numeric `Id`.
+- Put that number into `TELEGRAM_ALLOWLIST`.
+
 ## Environment Variables
 
 Required:
@@ -66,7 +88,7 @@ Optional:
 - `MULTI_AGENT_MODE` - `1` enables multi-worker orchestration, `0` single-agent mode (default: `1`).
 - `MAX_WORKER_TASKS` - maximum worker count (default: `10`).
 - `MIN_WORKER_TASKS` - minimum worker count when task is split (default: `2`).
-- `TELEGRAM_ALLOWLIST` - comma-separated Telegram user IDs allowed to use the bot.
+- `TELEGRAM_ALLOWLIST` - comma-separated Telegram user IDs allowed to use the bot. If empty, anyone can use the bot.
 - `ALLOW_GROUPS` - `1` to allow group chats, `0` private chats only (default: `0`).
 
 ## How It Works
