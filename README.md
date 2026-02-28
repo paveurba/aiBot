@@ -85,6 +85,7 @@ Optional:
 - `DEFAULT_MODEL` - default agent/model (for example `codex` or `claude`).
 - `REQUEST_TIMEOUT_MS` - request timeout in milliseconds (default: `180000`).
 - `REUSE_SESSIONS` - `1` to reuse CLI sessions, `0` to disable (default: `1`).
+- `CODEX_BYPASS_SANDBOX` - `1` to run `codex` with `--dangerously-bypass-approvals-and-sandbox`, `0` to keep normal sandbox/approval behavior (default: `1`).
 - `MAX_WORKER_TASKS` - maximum worker count (default: `10`).
 - `TELEGRAM_ALLOWLIST` - comma-separated Telegram user IDs allowed to use the bot. If empty, anyone can use the bot.
 - `ALLOW_GROUPS` - `1` to allow group chats, `0` private chats only (default: `0`).

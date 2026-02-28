@@ -24,6 +24,7 @@ const DEFAULT_MODEL = (process.env.DEFAULT_MODEL || "").trim() || null;
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 180000);
 const SEEN_TTL_MS = Number(process.env.SEEN_TTL_MS || 10 * 60 * 1000);
 const REUSE_SESSIONS = String(process.env.REUSE_SESSIONS || "1") === "1";
+const CODEX_BYPASS_SANDBOX = String(process.env.CODEX_BYPASS_SANDBOX || "1") === "1";
 
 const MAX_WORKER_TASKS = Math.max(1, Number(process.env.MAX_WORKER_TASKS || 10));
 
@@ -262,6 +263,7 @@ function runCodex({ sessionId, prompt, model }) {
   return new Promise((resolve, reject) => {
     const outputPath = path.join(os.tmpdir(), `codex-last-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`);
     const args = ["exec"];
+    if (CODEX_BYPASS_SANDBOX) args.push("--dangerously-bypass-approvals-and-sandbox");
     if (REUSE_SESSIONS && sessionId) args.push("resume", sessionId);
     args.push("--skip-git-repo-check", "--json", "--output-last-message", outputPath);
     if (model) args.push("-m", model);
@@ -565,5 +567,6 @@ console.log("Telegram bot running.");
 console.log("BOT_WORKDIR:", WORKDIR);
 console.log("Default model:", DEFAULT_MODEL || "(none)");
 console.log("Reuse sessions:", REUSE_SESSIONS);
+console.log("Codex bypass sandbox:", CODEX_BYPASS_SANDBOX);
 console.log("Groups allowed:", ALLOW_GROUPS);
 console.log("Allowlist:", ALLOWLIST.length ? ALLOWLIST.join(", ") : "(empty -> allows all)");
