@@ -1,35 +1,48 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVICE_LABEL="com.pavels.telegram.bot"
+BASE_LABEL="com.pavels.aibot"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-PLIST_PATH="$HOME/Library/LaunchAgents/$SERVICE_LABEL.plist"
+LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 LOG_DIR="$PROJECT_DIR/logs"
-OUT_LOG="$LOG_DIR/bot.out.log"
-ERR_LOG="$LOG_DIR/bot.err.log"
-NODE_BIN="${NODE_BIN:-$(command -v node)}"
-DOMAIN_GUI="gui/$(id -u)"
-DOMAIN_USER="user/$(id -u)"
+NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
+UID_NUM="$(id -u)"
+DOMAIN_GUI="gui/$UID_NUM"
+DOMAIN_USER="user/$UID_NUM"
 
 if [[ -z "${NODE_BIN:-}" ]]; then
   echo "node binary not found in PATH"
   exit 1
 fi
 
-mkdir -p "$HOME/Library/LaunchAgents" "$LOG_DIR"
+mkdir -p "$LAUNCH_AGENTS_DIR" "$LOG_DIR"
 
-cat >"$PLIST_PATH" <<EOF
+bootout_label() {
+  local label="$1"
+  launchctl bootout "$DOMAIN_GUI/$label" >/dev/null 2>&1 || true
+  launchctl bootout "$DOMAIN_USER/$label" >/dev/null 2>&1 || true
+}
+
+install_one() {
+  local label="$1"
+  local entry_script="$2"
+  local out_log="$3"
+  local err_log="$4"
+  local plist_path="$LAUNCH_AGENTS_DIR/$label.plist"
+  local domain=""
+
+  cat >"$plist_path" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>$SERVICE_LABEL</string>
+  <string>$label</string>
   <key>ProgramArguments</key>
   <array>
     <string>$NODE_BIN</string>
-    <string>$PROJECT_DIR/bot.js</string>
+    <string>$PROJECT_DIR/$entry_script</string>
   </array>
   <key>WorkingDirectory</key>
   <string>$PROJECT_DIR</string>
@@ -38,31 +51,36 @@ cat >"$PLIST_PATH" <<EOF
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>$OUT_LOG</string>
+  <string>$out_log</string>
   <key>StandardErrorPath</key>
-  <string>$ERR_LOG</string>
+  <string>$err_log</string>
 </dict>
 </plist>
-EOF
+PLIST
 
-plutil -lint "$PLIST_PATH" >/dev/null
+  plutil -lint "$plist_path" >/dev/null
+  bootout_label "$label"
 
-launchctl bootout "gui/$(id -u)/$SERVICE_LABEL" >/dev/null 2>&1 || true
-launchctl bootout "user/$(id -u)/$SERVICE_LABEL" >/dev/null 2>&1 || true
+  if launchctl bootstrap "$DOMAIN_GUI" "$plist_path" >/dev/null 2>&1; then
+    domain="$DOMAIN_GUI"
+  else
+    launchctl bootstrap "$DOMAIN_USER" "$plist_path"
+    domain="$DOMAIN_USER"
+  fi
 
-if launchctl bootstrap "$DOMAIN_GUI" "$PLIST_PATH" >/dev/null 2>&1; then
-  DOMAIN="$DOMAIN_GUI"
-else
-  launchctl bootstrap "$DOMAIN_USER" "$PLIST_PATH"
-  DOMAIN="$DOMAIN_USER"
-fi
+  launchctl enable "$domain/$label" >/dev/null 2>&1 || true
+  launchctl kickstart -k "$domain/$label"
 
-launchctl enable "$DOMAIN/$SERVICE_LABEL" >/dev/null 2>&1 || true
-launchctl kickstart -k "$DOMAIN/$SERVICE_LABEL"
+  echo "Installed: $label"
+  echo "  domain: $domain"
+  echo "  plist:  $plist_path"
+  echo "  out:    $out_log"
+  echo "  err:    $err_log"
+}
 
-echo "Service installed and started: $SERVICE_LABEL"
-echo "domain: $DOMAIN"
-echo "plist: $PLIST_PATH"
-echo "logs:"
-echo "  $OUT_LOG"
-echo "  $ERR_LOG"
+install_one "$BASE_LABEL.bot" "bot.js" "$LOG_DIR/bot.out.log" "$LOG_DIR/bot.err.log"
+install_one "$BASE_LABEL.worker.agent" "agent_worker.js" "$LOG_DIR/agent-worker.out.log" "$LOG_DIR/agent-worker.err.log"
+install_one "$BASE_LABEL.worker.stt" "stt_worker.js" "$LOG_DIR/stt-worker.out.log" "$LOG_DIR/stt-worker.err.log"
+install_one "$BASE_LABEL.worker.notify" "notify_worker.js" "$LOG_DIR/notify-worker.out.log" "$LOG_DIR/notify-worker.err.log"
+
+echo "All aiBot services installed and started."

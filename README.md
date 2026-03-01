@@ -1,117 +1,175 @@
 # aiBot
 
-Telegram bot that forwards messages to `codex` or `claude` CLI and returns responses in chat.
+Telegram bot that routes chat requests to `codex` or `claude` CLI.
 
-## Node.js Libraries Used
+## Features
 
-- `node-telegram-bot-api` (`^0.67.0`) - Telegram Bot API client used to receive and send Telegram messages.
-- `dotenv` (`^17.3.1`) - Loads environment variables from `.env` into `process.env`.
+- Task dispatcher routing:
+  - task-like requests are assigned to one free worker (`worker-2..worker-10`)
+  - one worker per request (no multi-worker split per request)
+  - if all workers are busy, requests are queued and dispatched automatically
+- Agent switching per chat: `/agent codex` or `/agent claude`.
+- Manager mode:
+  - `/manager` runs as an independent manager conversation
+  - diagnostics are global by default (workers, locks, queue, runtime)
+- Attachments:
+  - photo/document passed to agent as local file path
+  - voice/audio transcription via OpenAI STT or local script/Whisper
+- Optional Redis + BullMQ worker mode.
+- Local-file or Redis-backed session/state storage.
+
+## Dependencies
+
+Declared in `package.json`:
+
+- `node-telegram-bot-api`
+- `dotenv`
+- `bullmq`
+- `ioredis`
 
 ## Requirements
 
-- Node.js 18+ (recommended)
+- Node.js 18+
 - npm
-- Telegram bot token (from [@BotFather](https://t.me/BotFather))
-- At least one CLI available in `PATH`:
+- Telegram bot token from [@BotFather](https://t.me/BotFather)
+- At least one CLI in `PATH`:
   - `codex` (default)
   - `claude` (optional)
 
-## Installation
-
-1. Clone the repository:
+## Install
 
 ```bash
 git clone https://github.com/paveurba/aiBot.git
 cd aiBot
-```
-
-2. Install dependencies:
-
-```bash
 npm install
-```
-
-3. Create `.env` file:
-
-```bash
 cp .env.example .env
 ```
 
-4. Set required variables in `.env`:
+Set at minimum:
 
 ```dotenv
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_BOT_TOKEN=your_token
 ```
 
-5. Start the bot:
+Start:
 
 ```bash
-node bot.js
+npm run start
 ```
 
-## Make It Private (Your Telegram ID Only)
+## Commands
 
-If you want this bot to reply only to you, set your Telegram user ID in `.env`.
+- `/help`
+- `/reset`
+- `/agent`
+- `/agent codex`
+- `/agent claude`
+- `/agent default`
+- `/voice status|on|off`
+- `/voice <prompt>`
+- `/manager [question]`
 
-Example:
+Note: `/model ...` is intentionally disabled and points users to `/agent`.
 
-```dotenv
-TELEGRAM_ALLOWLIST=123456789
-ALLOW_GROUPS=0
+## Architecture
+
+- `bot.js`: thin bootstrap (loads env + config and starts app).
+- `lib/telegram_bot_app.js`: app lifecycle, Telegram polling, auth/filtering, queueing by chat lane.
+- `lib/command_service.js`: command handling + single-worker task dispatch routing.
+- `lib/attachment_service.js`: photo/document/voice/audio handling + transcription pipeline.
+- `lib/runtime_orchestrator.js`: queue orchestration, single-worker dispatcher, worker locks, queue fallback.
+- `agent_runner.js`: codex/claude process execution abstraction.
+
+## Worker Mode (Redis/BullMQ)
+
+If queue mode is enabled, keep workers running:
+
+```bash
+npm run start:worker:agent
+npm run start:worker:stt
+npm run start:worker:notify
 ```
 
-What this does:
+Or helper scripts:
 
-- Only user `123456789` can use the bot.
-- Group chats are blocked.
-- Other users will get: `Not allowed.`
+```bash
+./scripts/start-agent-worker.sh
+./scripts/start-stt-worker.sh
+./scripts/start-notify-worker.sh
+./scripts/start-all-workers.sh
+```
 
-How to find your Telegram user ID:
+Voice/TTS helpers:
 
-- In Telegram, message `@userinfobot` and copy your numeric `Id`.
-- Put that number into `TELEGRAM_ALLOWLIST`.
+```bash
+# build Telegram-compatible OGG/Opus voice file from text
+./scripts/tts_to_telegram_voice.sh --text "hello world" --output /tmp/voice.ogg --lang en
 
-## Environment Variables
+# synthesize and send to Telegram chat (chat id defaults to TELEGRAM_ALLOWLIST first entry)
+./scripts/send_voice.sh "hello world" [chat_id] [lang]
+```
 
-Required:
+Voice delivery monitoring:
 
-- `TELEGRAM_BOT_TOKEN` - Telegram bot token.
+- Voice send retries and outcomes are written as JSON lines to `VOICE_SEND_LOG_FILE` (default: `logs/voice-send.log`).
+- Retry behavior handles Telegram throttling/transient errors (`429`, `502`, `503`, `504`) with backoff.
+- Voice format is validated before sending (`.ogg`/`.opus`, non-empty file, OGG container header).
 
-Optional:
+## Key Environment Variables
 
-- `BOT_WORKDIR` - working directory for CLI runs used by both `codex` and `claude` (default: current directory).
-- `CODEX_BIN` - codex executable name/path (default: `codex`).
-- `CLAUDE_BIN` - claude executable name/path (default: `claude`).
-- `DEFAULT_MODEL` - default agent/model (for example `codex` or `claude`).
-- `REQUEST_TIMEOUT_MS` - request timeout in milliseconds (default: `180000`).
-- `REUSE_SESSIONS` - `1` to reuse CLI sessions, `0` to disable (default: `1`).
-- `CODEX_BYPASS_SANDBOX` - `1` to run `codex` with `--dangerously-bypass-approvals-and-sandbox`, `0` to keep normal sandbox/approval behavior (default: `1`).
-- `MAX_WORKER_TASKS` - maximum worker count (default: `10`).
-- `TELEGRAM_ALLOWLIST` - comma-separated Telegram user IDs allowed to use the bot. If empty, anyone can use the bot.
-- `ALLOW_GROUPS` - `1` to allow group chats, `0` private chats only (default: `0`).
+- `TELEGRAM_BOT_TOKEN` required
+- `BOT_WORKDIR`
+- `CODEX_BIN`, `CLAUDE_BIN`
+- `DEFAULT_MODEL`
+- `REQUEST_TIMEOUT_MS`
+- `REUSE_SESSIONS`
+- `CODEX_BYPASS_SANDBOX`
+- `TELEGRAM_ALLOWLIST`
+- `ALLOW_GROUPS`
 
-## How It Works
+Queue/Redis:
 
-- Bot receives a Telegram message.
-- It routes work to selected agent (`codex` or `claude`).
-- Chat-specific settings and session IDs are stored in:
-  - `settings.json`
-  - `sessions.json`
+- `REDIS_URL`
+- `USE_BULLMQ`
+- `REDIS_PREFIX`
+- `AGENT_QUEUE_NAME`, `STT_QUEUE_NAME`, `NOTIFY_QUEUE_NAME`, `DEAD_LETTER_QUEUE_NAME`
+- `AGENT_WORKER_CONCURRENCY`, `STT_WORKER_CONCURRENCY`, `NOTIFY_WORKER_CONCURRENCY`
+- `AGENT_QUEUE_WAIT_FOR_RESULT_MS`, `STT_QUEUE_WAIT_FOR_RESULT_MS`
+- `AGENT_ASYNC_ACK`
+- `JOB_ATTEMPTS`, `JOB_BACKOFF_MS`
+- `TELEGRAM_MIN_SEND_INTERVAL_MS` (default `200`)
+- `TELEGRAM_SEND_MAX_ATTEMPTS` (default `4`)
+- `TELEGRAM_SEND_RETRY_BASE_MS` (default `1200`)
 
-## Telegram Commands
+Runtime safety:
 
-- `/help` - show help
-- `/reset` - clear chat settings and sessions
-- `/agent` - show current agent
-- `/agent codex` - switch to codex
-- `/agent claude` - switch to claude
-- `/agent default` - reset to default agent
-- `/worker list` - list worker IDs
-- `/worker <id> <message>` - run message on a specific worker
+- `BOT_SINGLETON_LOCK` (default `/tmp/aibot-telegram-polling.lock`) prevents multiple polling bot processes.
 
-## Run as macOS LaunchAgent
+STT:
 
-Use helper scripts in `scripts/`:
+- `OPENAI_API_KEY`, `OPENAI_TRANSCRIBE_MODEL`
+- `LOCAL_STT_SCRIPT`
+- `WHISPER_BIN`, `WHISPER_MODEL`, `WHISPER_LANG`, `WHISPER_THREADS`
+
+Voice delivery:
+
+- `TTS_LANG`
+- `TTS_VENV_DIR`
+- `VOICE_SEND_MAX_ATTEMPTS`
+- `VOICE_SEND_RETRY_BASE_MS`
+- `VOICE_SEND_TIMEOUT_MS`
+- `VOICE_SEND_LOG_FILE`
+
+## Voice Setup Requirements
+
+- `ffmpeg` must be installed and available in `PATH`.
+- `python3` + `venv` support are required for TTS helper environment bootstrap.
+- `gTTS` is auto-installed in `TTS_VENV_DIR` on first `send_voice.sh` / `tts_to_telegram_voice.sh` run.
+- `TELEGRAM_BOT_TOKEN` and a valid chat id (`TELEGRAM_ALLOWLIST` or explicit `chat_id`) are required for delivery.
+
+## Service Scripts
+
+macOS LaunchAgent scripts:
 
 ```bash
 ./scripts/install-service.sh
@@ -119,26 +177,15 @@ Use helper scripts in `scripts/`:
 ./scripts/uninstall-service.sh
 ```
 
-Logs are written to:
+Raspberry/Linux systemd scripts:
 
-- `logs/bot.out.log`
-- `logs/bot.err.log`
-
-### macOS Service Status
-
-Verified on February 27, 2026 with `./scripts/status-service.sh`:
-
-- LaunchAgent plist exists: `~/Library/LaunchAgents/com.pavels.telegram.bot.plist`
-- Service state: `running`
-- Program: `/opt/homebrew/bin/node`
-- PID was present (`24045` at check time)
-- Log paths are configured:
-  - `logs/bot.out.log`
-  - `logs/bot.err.log`
-
-This confirms the macOS service is created and currently running.
+```bash
+./scripts/install-systemd.sh
+./scripts/status-systemd.sh
+./scripts/uninstall-systemd.sh
+```
 
 ## Notes
 
-- `.env` and `logs/` are ignored by git.
-- Never commit real secrets.
+- `.env` and `logs/` should not be committed.
+- Rotate bot token if it was ever exposed.

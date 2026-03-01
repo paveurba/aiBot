@@ -1,6 +1,17 @@
 {
+  "scripts": {
+    "test": "node --test",
+    "test:smoke": "node --test test/smoke_voice_reply.test.js",
+    "start": "node bot.js",
+    "start:worker": "node agent_worker.js",
+    "start:worker:agent": "node agent_worker.js",
+    "start:worker:stt": "node stt_worker.js",
+    "start:worker:notify": "node notify_worker.js"
+  },
   "dependencies": {
+    "bullmq": "^5.70.1",
     "dotenv": "^17.3.1",
+    "ioredis": "^5.10.0",
     "node-telegram-bot-api": "^0.67.0"
   }
 }

@@ -1,14 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVICE_LABEL="com.pavels.telegram.bot"
-PLIST_PATH="$HOME/Library/LaunchAgents/$SERVICE_LABEL.plist"
+BASE_LABEL="com.pavels.aibot"
 UID_NUM="$(id -u)"
+DOMAIN_GUI="gui/$UID_NUM"
+DOMAIN_USER="user/$UID_NUM"
+LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 
-launchctl bootout "gui/$UID_NUM/$SERVICE_LABEL" >/dev/null 2>&1 || true
-launchctl bootout "user/$UID_NUM/$SERVICE_LABEL" >/dev/null 2>&1 || true
-launchctl disable "gui/$UID_NUM/$SERVICE_LABEL" >/dev/null 2>&1 || true
-launchctl disable "user/$UID_NUM/$SERVICE_LABEL" >/dev/null 2>&1 || true
-rm -f "$PLIST_PATH"
+remove_one() {
+  local label="$1"
+  local plist_path="$LAUNCH_AGENTS_DIR/$label.plist"
 
-echo "Service removed: $SERVICE_LABEL"
+  launchctl bootout "$DOMAIN_GUI/$label" >/dev/null 2>&1 || true
+  launchctl bootout "$DOMAIN_USER/$label" >/dev/null 2>&1 || true
+  launchctl disable "$DOMAIN_GUI/$label" >/dev/null 2>&1 || true
+  launchctl disable "$DOMAIN_USER/$label" >/dev/null 2>&1 || true
+  rm -f "$plist_path"
+
+  echo "Removed: $label"
+}
+
+remove_one "$BASE_LABEL.bot"
+remove_one "$BASE_LABEL.worker.agent"
+remove_one "$BASE_LABEL.worker.stt"
+remove_one "$BASE_LABEL.worker.notify"
+
+echo "All aiBot services removed."
