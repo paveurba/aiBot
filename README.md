@@ -5,7 +5,7 @@ Telegram bot that routes chat requests to `codex` or `claude` CLI.
 ## Features
 
 - Task dispatcher routing:
-  - task-like requests are assigned to one free worker (`worker-2..worker-10`)
+  - task-like requests are assigned to one free worker (`worker-2..worker-N`, where `N = MAX_WORKER_TASKS`, default `10`)
   - one worker per request (no multi-worker split per request)
   - if all workers are busy, requests are queued and dispatched automatically
 - Agent switching per chat: `/agent codex` or `/agent claude`.
@@ -119,13 +119,17 @@ Voice delivery monitoring:
 
 - `TELEGRAM_BOT_TOKEN` required
 - `BOT_WORKDIR`
+- `BOT_PATH`
+- `BOT_LOG_DIR`, `BOT_LOG_FILE`, `BOT_ERROR_LOG_FILE`
 - `CODEX_BIN`, `CLAUDE_BIN`
 - `DEFAULT_MODEL`
 - `REQUEST_TIMEOUT_MS`
+- `SEEN_TTL_MS`
 - `REUSE_SESSIONS`
 - `CODEX_BYPASS_SANDBOX`
 - `TELEGRAM_ALLOWLIST`
 - `ALLOW_GROUPS`
+- `ATTACHMENT_TTL_MS`
 
 Queue/Redis:
 
@@ -137,6 +141,7 @@ Queue/Redis:
 - `AGENT_QUEUE_WAIT_FOR_RESULT_MS`, `STT_QUEUE_WAIT_FOR_RESULT_MS`
 - `AGENT_ASYNC_ACK`
 - `JOB_ATTEMPTS`, `JOB_BACKOFF_MS`
+- `QUEUE_INIT_RETRY_MS`
 - `TELEGRAM_MIN_SEND_INTERVAL_MS` (default `200`)
 - `TELEGRAM_SEND_MAX_ATTEMPTS` (default `4`)
 - `TELEGRAM_SEND_RETRY_BASE_MS` (default `1200`)
@@ -153,6 +158,11 @@ STT:
 
 Voice delivery:
 
+- `OPENAI_TTS_MODEL`
+- `OPENAI_TTS_VOICE`
+- `OPENAI_TTS_FORMAT`
+- `LOCAL_TTS_SCRIPT`
+- `FFMPEG_BIN`
 - `TTS_LANG`
 - `TTS_VENV_DIR`
 - `VOICE_SEND_MAX_ATTEMPTS`
